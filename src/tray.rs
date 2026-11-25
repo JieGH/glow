@@ -343,7 +343,20 @@ fn place(window: &NSWindow, item: &NSStatusItem, mtm: MainThreadMarker) {
 
 #[cfg(test)]
 mod tests {
-    use super::Popup;
+    use super::*;
+
+    #[test]
+    fn auto_boost_is_off_by_default_and_remembered() {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        defaults.removeObjectForKey(&NSString::from_str(BOOST_ON_KEY));
+        assert!(!boost_on_saved()); // nothing saved: off
+        save_boost_on(true);
+        assert!(boost_on_saved());
+        save_boost_on(false);
+        assert!(!boost_on_saved());
+        defaults.removeObjectForKey(&NSString::from_str(BOOST_ON_KEY)); // leave the test run's settings clean
+    }
+
     #[test]
     fn pops_on_keys_and_boost_changes_only() {
         let mut p = Popup::default();
