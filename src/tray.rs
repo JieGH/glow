@@ -10,11 +10,12 @@ use objc2::runtime::{AnyObject, NSObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSImage, NSMenu, NSMenuItem,
-    NSPopUpMenuWindowLevel, NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSWindow,
+    NSPopUpMenuWindowLevel, NSScreen, NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSWindow,
     NSWindowCollectionBehavior,
 };
-use objc2_foundation::{NSPoint, NSRect, NSString, NSTimer, NSUserDefaults};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer, NSUserDefaults};
 use std::cell::{Cell, RefCell};
+use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -217,17 +218,22 @@ impl Tray {
         // Runs the brightness logic while the bubble is closed (egui stops drawing then), and pops the
         // bubble up when the brightness changes.
         let (w, it, popup) = (window.clone(), item.clone(), RefCell::new(Popup::default()));
+        let wake_core = core.clone();
         let timer = unsafe {
             NSTimer::scheduledTimerWithTimeInterval_repeats_block(
                 BACKGROUND_INTERVAL,
                 true,
-                &RcBlock::new(move |_| {
+                &RcBlock::new(move |t: NonNull<NSTimer>| {
                     // Start quietly: the bubble stays closed until it's first shown (which makes it opaque).
                     if w.alphaValue() == 0.0 && w.isVisible() {
                         w.orderOut(None);
                     }
                     let Ok(mut c) = core.try_borrow_mut() else { return };
-                    c.step();
+                    // Fade a frame at a time while something moves; otherwise keep the idle cadence.
+                    let frame = NSScreen::mainScreen(mtm).map_or(60, |s| s.maximumFramesPerSecond()).max(1) as f64;
+                    c.step(1.0 / frame as f32);
+                    let next = if c.fast() { 1.0 / frame } else { BACKGROUND_INTERVAL };
+                    t.as_ref().setFireDate(&NSDate::dateWithTimeIntervalSinceNow(next));
                     let total = c.total(c.current_sys());
                     let force = std::mem::take(&mut c.key_moved);
                     let mut p = popup.borrow_mut();
@@ -257,6 +263,11 @@ impl Tray {
                 }),
             )
         };
+
+        // Menus and drags run the loop in other modes; keep ticking there too, and wake on a key press.
+        unsafe { NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+        let t = timer.clone();
+        wake_core.borrow().booster.on_key(Box::new(move || t.setFireDate(&NSDate::now())));
 
         Some(Tray { window, hidden_at, _target: target, _item: item, _timer: timer })
     }

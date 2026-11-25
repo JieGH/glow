@@ -64,6 +64,10 @@ pub struct Core {
     hold_until: Option<Instant>,
     drop_since: Option<Instant>,
     own_until: Option<Instant>,
+    last_step: Option<Instant>,
+    fast_until: Option<Instant>, // a key press keeps fast mode on until then
+    busy: bool,                  // some output is still fading
+    was_fast: bool,
 }
 
 struct App {
@@ -104,7 +108,14 @@ impl Core {
     }
 
     /// One step of the brightness logic: follow the system, then boost and/or sync-dim all displays.
-    pub fn step(&mut self) {
+    /// `frame`: seconds per display refresh, the fade time for the first step after idle.
+    pub fn step(&mut self, frame: f32) {
+        let now = Instant::now();
+        let dt = match self.last_step {
+            Some(t) if self.was_fast => (now - t).as_secs_f32().min(0.1),
+            _ => frame,
+        };
+        self.last_step = Some(now);
         if !self.on {
             self.level = 0.0; // switched off: back to plain/synced brightness up to 100%
         }
@@ -112,7 +123,7 @@ impl Core {
         // Fade the system (or software) brightness to where a key press sent it.
         if let Some(goal) = self.sys_goal {
             if let Some(cur) = self.last_sys {
-                let next = boost::ease(cur, goal);
+                let next = boost::ease(cur, goal, dt);
                 self.booster.set_system_brightness(next);
                 self.last_sys = Some(next);
                 self.own_until = Some(Instant::now() + SETTLE);
@@ -120,7 +131,7 @@ impl Core {
                     self.sys_goal = None;
                 }
             } else {
-                let next = boost::ease(self.soft_sys, goal);
+                let next = boost::ease(self.soft_sys, goal, dt);
                 self.soft_sys = next;
                 if next == goal {
                     self.sys_goal = None;
@@ -137,7 +148,13 @@ impl Core {
         self.booster.set_on(active);
 
         let dim_level = if self.sync { self.last_sys.unwrap_or(self.soft_sys) } else { 1.0 };
-        self.booster.tick(self.level, dim_level, self.sync);
+        self.busy = self.booster.tick(self.level, dim_level, self.sync, dt);
+        self.was_fast = self.fast();
+    }
+
+    /// Whether the next step should come a frame later: a fade is running or a key was just pressed.
+    pub fn fast(&self) -> bool {
+        self.sys_goal.is_some() || self.busy || self.fast_until.is_some_and(|t| Instant::now() < t)
     }
 
     /// With no screen that has system brightness, macOS ignores the keys, so Glow steps the total itself.
@@ -199,6 +216,12 @@ impl Core {
     /// Keep the boost, synced displays, and system brightness keys / Control Center working as one control.
     fn follow_system(&mut self) {
         let (mut ups, mut downs) = self.booster.take_key_presses();
+        if ups + downs > 0 {
+            self.fast_until = Some(Instant::now() + HOLD);
+        }
+        if downs > 0 && !(self.on && self.level > 0.0) {
+            self.hold_until = None; // nothing to take off the boost: macOS's dimming stands
+        }
         if self.takes_all_keys() && ups + downs > 0 {
             self.nudge(ups - downs);
             (ups, downs) = (0, 0);
@@ -325,7 +348,7 @@ impl eframe::App for App {
         #[cfg(not(target_os = "macos"))]
         let timer_runs = false;
         if self.shot.is_none() && !timer_runs {
-            c.step();
+            c.step(1.0 / 60.0);
         }
         let (space, up, down) = ctx.input(|i| {
             (
@@ -617,6 +640,10 @@ fn main() -> eframe::Result {
                 hold_until: None,
                 drop_since: None,
                 own_until: None,
+                last_step: None,
+                fast_until: None,
+                busy: false,
+                was_fast: false,
             }));
             #[cfg(target_os = "macos")]
             let tray = if shot.is_none() { tray::Tray::new(cc.egui_ctx.clone(), core.clone()) } else { None };

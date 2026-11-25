@@ -16,12 +16,12 @@ pub const GATE_TIMEOUT: Duration = Duration::from_secs(10); // tunable: give up 
 pub const GAMMA_DRIFT: f32 = 0.03;
 pub const TRIGGER_VALUE: f64 = 1.6;
 pub const TRIGGER_SIZE: f64 = 5.0;
-pub const SMOOTH: f32 = 0.62; // share per ~14 Hz background step (~0.3 s fade)
+pub const FADE_TAU: f32 = 0.040; // seconds; a step lands in ~120 ms, whatever the update rate
 pub const DIM_FLOOR: f32 = 0.05; // minimum software gamma scale at 0% (dark, yet never strands the screen)
 
-/// Move the applied value a share of the way to the target, snapping when close.
-pub fn ease(applied: f32, target: f32) -> f32 {
-    if (target - applied).abs() < 0.003 { target } else { applied + (target - applied) * SMOOTH }
+/// Move the applied value toward the target by the time `dt` (seconds) that passed, snapping when close.
+pub fn ease(applied: f32, target: f32, dt: f32) -> f32 {
+    if (target - applied).abs() < 0.003 { target } else { applied + (target - applied) * (1.0 - (-dt / FADE_TAU).exp()) }
 }
 
 /// Boost multiplier: 1.0 at level 0, the screen's full HDR headroom at level 1 (linear; tunable).
@@ -67,7 +67,10 @@ impl Booster {
     }
     pub fn set_on(&mut self, _on: bool) {}
     pub fn restore_all(&mut self) {}
-    pub fn tick(&mut self, _boost_level: f32, _dim_level: f32, _sync: bool) {}
+    pub fn tick(&mut self, _boost_level: f32, _dim_level: f32, _sync: bool, _dt: f32) -> bool {
+        false
+    }
+    pub fn on_key(&self, _wake: Box<dyn Fn()>) {}
     pub fn headroom(&self) -> f64 {
         1.0
     }
@@ -121,6 +124,7 @@ mod mac {
     use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
     use std::ffi::{c_char, c_void};
     use std::ptr::NonNull;
+    use std::cell::RefCell;
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::sync::{Arc, OnceLock};
 
@@ -263,6 +267,11 @@ mod mac {
                 .iter()
                 .filter(|d| !d.has_hw_brightness || Some(d.id) != self.brightness_id)
                 .count()
+        }
+
+        /// Run `wake` on the main thread each time a brightness key press is counted.
+        pub fn on_key(&self, wake: Box<dyn Fn()>) {
+            *self.keys.wake.borrow_mut() = Some(wake);
         }
 
         /// Brightness (up, down) key presses seen since the last call.
@@ -445,7 +454,9 @@ mod mac {
         }
 
         /// Called every frame: updates HDR boost above 100% and synced hardware/software dimming below 100%.
-        pub fn tick(&mut self, boost_level: f32, dim_level: f32, sync: bool) {
+        /// Returns whether any value is still fading.
+        pub fn tick(&mut self, boost_level: f32, dim_level: f32, sync: bool, dt: f32) -> bool {
+            let mut busy = false;
             if self.last_screen_sync.elapsed() >= SCREEN_SYNC_INTERVAL {
                 self.sync_screens();
             }
@@ -509,7 +520,8 @@ mod mac {
                                 }
                                 v
                             });
-                            let next = ease(cur, hw_target);
+                            let next = ease(cur, hw_target, dt);
+                            busy |= next != hw_target;
                             if (next - cur).abs() > 0.0005 || d.applied_hw.is_none() {
                                 unsafe {
                                     set(d.id, next.clamp(0.0, 1.0));
@@ -546,7 +558,8 @@ mod mac {
                         }
                     }
 
-                    let next = ease(d.applied_gamma, target_gamma);
+                    let next = ease(d.applied_gamma, target_gamma, dt);
+                    busy |= next != target_gamma;
                     let moving = (next - d.applied_gamma).abs() > 0.0;
                     let periodic = target_gamma < 0.999 && d.last_gamma_check.elapsed() >= GAMMA_CHECK_INTERVAL;
 
@@ -594,6 +607,7 @@ mod mac {
                 self.gamma_dirty = true;
             }
             self.maybe_restore_colorsync();
+            busy
         }
 
         /// Best HDR headroom among the screens (what 100% boost reaches).
@@ -688,6 +702,9 @@ mod mac {
         let seen = move |e: NonNull<NSEvent>| {
             if let Some((i, true)) = brightness_key(unsafe { e.as_ref() }) {
                 k.count[i].fetch_add(1, Ordering::Relaxed);
+                if let Some(w) = k.wake.borrow().as_ref() {
+                    w();
+                }
             }
         };
         let local = seen.clone();
@@ -711,6 +728,7 @@ mod mac {
     #[derive(Default)]
     pub struct Keys {
         count: [AtomicI32; 2],      // presses seen: [up, down]
+        wake: RefCell<Option<Box<dyn Fn()>>>, // runs on each counted press
     }
 
     /// A brightness key event: (0 = up / 1 = down, pressed down?).
@@ -838,14 +856,20 @@ mod cpu_tests {
 mod tests {
     use super::{dim_factor, ease, factor, DIM_FLOOR};
     #[test]
-    fn ease_moves_smoothly_then_lands() {
-        let mut a = 1.0;
-        let first = ease(a, 1.5);
-        assert!(first > 1.0 && first < 1.5);
-        for _ in 0..10 {
-            a = ease(a, 1.5);
+    fn ease_moves_smoothly_then_lands_within_150ms() {
+        let (mut a, goal) = (1.0, 1.0 + 1.0 / 16.0); // one key step
+        let first = ease(a, goal, 1.0 / 60.0);
+        assert!(first > a && first - a <= 0.5 * (goal - a)); // first 60 Hz frame shows at most half the step
+        for _ in 0..9 {
+            a = ease(a, goal, 1.0 / 60.0);
         }
-        assert_eq!(a, 1.5);
+        assert_eq!(a, goal); // 9 frames = 150 ms
+    }
+    #[test]
+    fn ease_does_not_depend_on_tick_rate() {
+        let one = ease(0.0, 1.0, 0.016);
+        let two = ease(ease(0.0, 1.0, 0.008), 1.0, 0.008);
+        assert!((one - two).abs() < 1e-4);
     }
     #[test]
     fn factor_spans_one_to_headroom() {
