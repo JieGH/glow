@@ -117,6 +117,18 @@ define_class!(
             self.ivars().ctx.request_repaint();
         }
 
+        #[unsafe(method(checkUpdate:))]
+        fn check_update(&self, _sender: Option<&AnyObject>) {
+            if let Ok(c) = self.ivars().core.try_borrow() {
+                crate::update::check_now(&c.update, &self.ivars().ctx);
+            }
+        }
+
+        #[unsafe(method(openUpdate:))]
+        fn open_update(&self, _sender: Option<&AnyObject>) {
+            crate::update::open_page();
+        }
+
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
             if let Ok(mut c) = self.ivars().core.try_borrow_mut() {
@@ -158,6 +170,15 @@ impl Target {
         add("Show Controls", sel!(showBubble:), "");
         add(if on { "Turn Boost Off" } else { "Turn Boost On" }, sel!(toggleBoost:), "");
         add(if sync { "Turn Display Sync Off" } else { "Turn Display Sync On" }, sel!(toggleSync:), "");
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        use crate::update::Status;
+        let status = self.ivars().core.try_borrow().map(|c| c.update.lock().unwrap().clone()).unwrap_or(Status::Idle);
+        match status {
+            Status::Available(v) => add(&format!("Update Available: {v}…"), sel!(openUpdate:), ""),
+            Status::Checking => add("Checking for Updates…", sel!(checkUpdate:), ""),
+            Status::UpToDate => add("Up to Date. Check Again", sel!(checkUpdate:), ""),
+            _ => add("Check for Updates…", sel!(checkUpdate:), ""),
+        }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         add("Quit Glow", sel!(quit:), "q");
         #[allow(deprecated)]
