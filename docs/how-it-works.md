@@ -31,12 +31,13 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
   brightness-up at full brightness goes past 100%.
 - One key press moves 1/16 of the range. Changes fade smoothly: each step covers 62% of the
   remaining distance, about 14 times a second.
-- With Accessibility permission (asked once), Glow takes the brightness keys before macOS sees
-  them, so the screen never dims first. With **Show on change** on and Boost or Sync on, Glow
-  handles every key across 0–200% and shows its own panel instead of the macOS indicator.
-- Without the permission, Glow falls back to watching key presses:
+- Glow needs no privacy permission. It watches brightness key presses without taking them, so
+  macOS always dims first and shows its own indicator. Glow follows and corrects:
   - Brightness-down while boosted takes one step off the boost and holds the system at full for
     600 ms, so the system's own dimming can't drain the boost.
+  - Brightness-up at full brightness adds one step of boost.
+  - With no screen that has its own brightness (lid closed, external displays only) and Sync on,
+    macOS ignores the keys, so Glow moves the total one step across 0–200% itself.
   - Lowering the brightness another way (Control Center) while boosted takes the boost down by the
     same amount, after 150 ms in case a key press is on its way.
 - After Glow sets the system brightness itself, it trusts its own value for 0.4 s so the slider

@@ -57,7 +57,6 @@ pub struct Core {
     level: f32,
     soft_sys: f32, // software-only brightness (0..1) when no display exposes hardware brightness
     zero_since: Option<Instant>,
-    asked_keys: bool,
     show_hud: bool, // pop the bubble up when the brightness changes; the person can turn it off
     sys_goal: Option<f32>, // system/software brightness we're fading to after a key press
     key_moved: bool,       // a brightness key was handled this step (the indicator shows)
@@ -110,18 +109,6 @@ impl Core {
             self.level = 0.0; // switched off: back to plain/synced brightness up to 100%
         }
         self.follow_system();
-        if (self.on || self.sync) && !self.asked_keys {
-            self.asked_keys = true;
-            self.booster.watch_keys(); // asks for Accessibility once, so the keys work smoothly across all displays
-        }
-        if self.takes_all_keys() {
-            // Glow handles every brightness key, so macOS's own indicator never appears (it can't be closed).
-            self.booster.set_intercept(true, true);
-        } else {
-            // Let the brightness keys reach the boost without macOS dimming the screen first.
-            let at_full = self.last_sys.is_none_or(|s| s >= 0.999);
-            self.booster.set_intercept(self.on && at_full && self.level < 1.0, self.on && self.level > 0.0);
-        }
         // Fade the system (or software) brightness to where a key press sent it.
         if let Some(goal) = self.sys_goal {
             if let Some(cur) = self.last_sys {
@@ -153,17 +140,9 @@ impl Core {
         self.booster.tick(self.level, dim_level, self.sync);
     }
 
-    /// With key permission and the indicator on (or when only software-dimmable displays exist),
-    /// Glow handles all brightness keys itself.
+    /// With no screen that has system brightness, macOS ignores the keys, so Glow steps the total itself.
     fn takes_all_keys(&self) -> bool {
-        if !self.booster.keys_taken() {
-            return false;
-        }
-        if self.last_sys.is_some() {
-            (self.on || self.sync) && self.show_hud
-        } else {
-            self.sync && self.booster.has_soft_dimmable()
-        }
+        self.last_sys.is_none() && self.sync && self.booster.has_soft_dimmable()
     }
 
     /// Where the brightness is heading (0..2), counting a fade still in progress.
@@ -628,7 +607,6 @@ fn main() -> eframe::Result {
                 level: 0.0,
                 soft_sys: 1.0,
                 zero_since: None,
-                asked_keys: false,
                 sys_goal: None,
                 key_moved: false,
                 #[cfg(target_os = "macos")]

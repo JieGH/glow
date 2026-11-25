@@ -22,9 +22,6 @@ See [docs/how-it-works.md](docs/how-it-works.md) for details.
    try to open it once, then go to **System Settings → Privacy & Security** and click
    **Open Anyway**. Or remove the download flag in Terminal:
    `xattr -dr com.apple.quarantine /Applications/Glow.app`
-4. When asked, give Glow **Accessibility** permission
-   (**System Settings → Privacy & Security → Accessibility**). Glow needs it to handle the
-   brightness keys before macOS dims the screen. Without it, Glow still works, with less smooth keys.
 
 ## Use
 
