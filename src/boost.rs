@@ -16,12 +16,17 @@ pub const GATE_TIMEOUT: Duration = Duration::from_secs(10); // tunable: give up 
 pub const GAMMA_DRIFT: f32 = 0.03;
 pub const TRIGGER_VALUE: f64 = 1.6;
 pub const TRIGGER_SIZE: f64 = 5.0;
+pub const SPEED_CAP: f32 = 3.0; // most the total moves per second (0–100% takes at least 0.33 s)
 pub const FADE_TAU: f32 = 0.040; // seconds; a step lands in ~120 ms, whatever the update rate
 pub const DIM_FLOOR: f32 = 0.05; // minimum software gamma scale at 0% (dark, yet never strands the screen)
 
-/// Move the applied value toward the target by the time `dt` (seconds) that passed, snapping when close.
+/// Move the applied value toward the target by the time `dt` (seconds) that passed, at most `SPEED_CAP`, snapping when close.
 pub fn ease(applied: f32, target: f32, dt: f32) -> f32 {
-    if (target - applied).abs() < 0.003 { target } else { applied + (target - applied) * (1.0 - (-dt / FADE_TAU).exp()) }
+    if (target - applied).abs() < 0.003 {
+        return target;
+    }
+    let step = (target - applied) * (1.0 - (-dt / FADE_TAU).exp());
+    applied + step.clamp(-SPEED_CAP * dt, SPEED_CAP * dt)
 }
 
 /// Boost multiplier: 1.0 at level 0, the screen's full HDR headroom at level 1 (linear; tunable).
@@ -67,7 +72,7 @@ impl Booster {
     }
     pub fn set_on(&mut self, _on: bool) {}
     pub fn restore_all(&mut self) {}
-    pub fn tick(&mut self, _boost_level: f32, _dim_level: f32, _sync: bool, _dt: f32) -> bool {
+    pub fn tick(&mut self, _boost_level: f32, _dim_level: f32, _sync: bool) -> bool {
         false
     }
     pub fn on_key(&self, _wake: Box<dyn Fn()>) {}
@@ -454,8 +459,8 @@ mod mac {
         }
 
         /// Called every frame: updates HDR boost above 100% and synced hardware/software dimming below 100%.
-        /// Returns whether any value is still fading.
-        pub fn tick(&mut self, boost_level: f32, dim_level: f32, sync: bool, dt: f32) -> bool {
+        /// Writes every screen straight from the one eased value. Returns whether anything was written or is still waking.
+        pub fn tick(&mut self, boost_level: f32, dim_level: f32, sync: bool) -> bool {
             let mut busy = false;
             if self.last_screen_sync.elapsed() >= SCREEN_SYNC_INTERVAL {
                 self.sync_screens();
@@ -483,6 +488,7 @@ mod mac {
                     let h = s.maximumExtendedDynamicRangeColorComponentValue();
                     match &mut d.boost {
                         BoostPhase::Waiting { since } => {
+                            busy = true; // keep ticking while macOS ramps the headroom
                             if h > EDR_MIN_HEADROOM {
                                 let owned_by_dim = d.applied_gamma < 0.999;
                                 let ok = d
@@ -520,14 +526,15 @@ mod mac {
                                 }
                                 v
                             });
-                            let next = ease(cur, hw_target, dt);
-                            busy |= next != hw_target;
-                            if (next - cur).abs() > 0.0005 || d.applied_hw.is_none() {
+                            if (hw_target - cur).abs() > 0.0005 || d.applied_hw.is_none() {
                                 unsafe {
-                                    set(d.id, next.clamp(0.0, 1.0));
+                                    set(d.id, hw_target);
                                 }
+                                busy = true;
+                                d.applied_hw = Some(hw_target);
+                            } else {
+                                d.applied_hw = Some(cur);
                             }
-                            d.applied_hw = Some(next);
                         }
                     } else {
                         d.applied_hw = None;
@@ -558,9 +565,9 @@ mod mac {
                         }
                     }
 
-                    let next = ease(d.applied_gamma, target_gamma, dt);
-                    busy |= next != target_gamma;
-                    let moving = (next - d.applied_gamma).abs() > 0.0;
+                    let next = target_gamma;
+                    let moving = (next - d.applied_gamma).abs() > 0.0005;
+                    busy |= moving;
                     let periodic = target_gamma < 0.999 && d.last_gamma_check.elapsed() >= GAMMA_CHECK_INTERVAL;
 
                     if let Some(base) = &d.baseline {
@@ -867,9 +874,16 @@ mod tests {
     }
     #[test]
     fn ease_does_not_depend_on_tick_rate() {
-        let one = ease(0.0, 1.0, 0.016);
-        let two = ease(ease(0.0, 1.0, 0.008), 1.0, 0.008);
-        assert!((one - two).abs() < 1e-4);
+        for goal in [0.05, 0.3, 1.0] {
+            let one = ease(0.0, goal, 0.016);
+            let two = ease(ease(0.0, goal, 0.008), goal, 0.008);
+            assert!((one - two).abs() < 0.01, "{goal}: {one} vs {two}");
+        }
+    }
+    #[test]
+    fn ease_caps_speed() {
+        assert!((ease(0.0, 1.0, 0.016) - 3.0 * 0.016).abs() < 1e-6);
+        assert!((ease(1.0, 0.0, 0.016) - (1.0 - 3.0 * 0.016)).abs() < 1e-6);
     }
     #[test]
     fn factor_spans_one_to_headroom() {
