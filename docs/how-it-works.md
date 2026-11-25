@@ -34,13 +34,14 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
   about 120 ms at any update rate. The total moves at most 3.0 per second (`SPEED_CAP`).
   One eased total drives every screen: the system value, the synced displays, software dimming
   and the boost are all written from it, so they move together. Dragging the bar only sets the
-  goal; the fade follows it A key press wakes the timer at once. While anything fades, or
+  goal; the fade follows it. A key press wakes the timer at once. While anything fades, or
   for 600 ms after a key press, the timer runs once per display frame; otherwise it runs about
   14 times a second.
 - Glow needs no privacy permission. It watches brightness key presses without taking them, so
   macOS always dims first and shows its own indicator. Glow follows and corrects:
-  - Brightness-down while boosted takes one step off the boost and holds the system at full for
-    600 ms (re-asserted every frame; a down press with no boost left ends the hold), so the system's own dimming can't drain the boost.
+  - Brightness-down while boosted: macOS dims the screen one step and Glow can't stop it (it
+    ignores Glow's writes to the system brightness). After 150 ms, once the dimming has settled,
+    Glow moves it into the boost: system back to full, boost down by the same amount.
   - Brightness-up at full brightness adds one step of boost.
   - With no screen that has its own brightness (lid closed, external displays only) and Sync on,
     macOS ignores the keys, so Glow moves the total one step across 0–200% itself.

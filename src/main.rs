@@ -12,8 +12,8 @@ const DIM_DOT: Color32 = Color32::from_rgb(110, 180, 255);
 const BOOST_DOT: Color32 = Color32::from_rgb(80, 210, 120);
 const PANEL: Color32 = Color32::from_rgb(30, 30, 34);
 const STEPS: f32 = 16.0; // tunable: one brightness key step = 1/16 of the brightness range
-const HOLD: Duration = Duration::from_millis(600); // ignore the system's own dimming animation after a key press
-const DEBOUNCE: Duration = Duration::from_millis(150); // a key press may arrive just after the system dims
+const FAST_AFTER_KEY: Duration = Duration::from_millis(600); // keep updating every frame after a key press, so synced screens follow macOS's dimming
+const DEBOUNCE: Duration = Duration::from_millis(150); // wait for macOS's dimming to settle before moving it into the boost
 const SETTLE: Duration = Duration::from_millis(400); // after we set the system brightness, trust our value over read-backs
 const READBACK_NOISE: f32 = 0.01; // a read-back this close to Glow's last write is not an outside change
 const LINGER: Duration = Duration::from_secs(1); // keep HDR awake briefly after returning to 100%, so the fade-out finishes
@@ -62,7 +62,6 @@ pub struct Core {
     sys_goal: Option<f32>, // system/software brightness we're fading to after a key press
     key_moved: bool,       // a brightness key was handled this step (the indicator shows)
     last_sys: Option<f32>,
-    hold_until: Option<Instant>,
     drop_since: Option<Instant>,
     own_until: Option<Instant>,
     last_step: Option<Instant>,
@@ -236,46 +235,28 @@ impl Core {
         }
     }
 
-    /// Keep the system at full brightness for a moment, so its own dimming doesn't eat the boost.
-    fn hold(&mut self) {
-        self.hold_until = Some(Instant::now() + HOLD);
-        self.drop_since = None;
-        self.booster.set_system_brightness(1.0);
-        self.last_sys = Some(1.0);
-    }
-
     /// Keep the boost, synced displays, and system brightness keys / Control Center working as one control.
     fn follow_system(&mut self) {
-        let (mut ups, mut downs) = self.booster.take_key_presses();
+        let (mut ups, downs) = self.booster.take_key_presses();
         if ups + downs > 0 {
-            self.fast_until = Some(Instant::now() + HOLD);
-        }
-        if downs > 0 && !(self.on && self.level > 0.0) {
-            self.hold_until = None; // nothing to take off the boost: macOS's dimming stands
+            self.trace(&format!("key up={ups} down={downs} sys={:?}", self.booster.system_brightness()), self.last_sys.unwrap_or(0.0), self.boost_applied);
+            self.fast_until = Some(Instant::now() + FAST_AFTER_KEY);
         }
         if self.takes_all_keys() && ups + downs > 0 {
             self.nudge(ups - downs);
-            (ups, downs) = (0, 0);
+            ups = 0;
         }
         let sys = self.booster.system_brightness();
         let boosted = self.on && self.level > 0.0;
-        if downs > 0 && boosted {
-            // Brightness-down while boosted: one step off the boost, the system stays at full.
-            self.level = (self.level - downs as f32 / STEPS).max(0.0);
-            self.hold();
-        } else if self.hold_until.is_some_and(|t| Instant::now() < t) {
-            if sys.is_some_and(|s| s < 0.999) {
-                self.booster.set_system_brightness(1.0);
-            }
-            self.last_sys = Some(1.0);
-        } else if self.dragging || self.sys_goal.is_some() || self.own_until.is_some_and(|t| Instant::now() < t) {
+        if self.dragging || self.sys_goal.is_some() || self.own_until.is_some_and(|t| Instant::now() < t) {
             // Our own change is running or settling: keep our value so the slider doesn't jump.
         } else if let (Some(now), Some(last)) = (sys, self.last_sys) {
             if boosted && now < last - READBACK_NOISE {
-                // Dimmed another way (Control Center): take it out of the boost first, by the same amount.
+                // Dimmed by macOS (a brightness key or Control Center): take it out of the boost first, by the same amount.
                 let t = *self.drop_since.get_or_insert_with(Instant::now);
                 if t.elapsed() >= DEBOUNCE {
                     self.drop_since = None;
+                    self.last_sys = Some(now); // macOS really is here; move the dimming into the boost
                     self.set_total(1.0 + self.level - (last - now));
                 }
             } else {
@@ -675,7 +656,6 @@ fn main() -> eframe::Result {
                 #[cfg(not(target_os = "macos"))]
                 show_hud: false,
                 last_sys: None,
-                hold_until: None,
                 drop_since: None,
                 own_until: None,
                 last_step: None,
