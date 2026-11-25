@@ -12,8 +12,8 @@ const DIM_DOT: Color32 = Color32::from_rgb(110, 180, 255);
 const BOOST_DOT: Color32 = Color32::from_rgb(80, 210, 120);
 const PANEL: Color32 = Color32::from_rgb(30, 30, 34);
 const STEPS: f32 = 16.0; // tunable: one brightness key step = 1/16 of the brightness range
-const HOLD: Duration = Duration::from_millis(600); // ignore the system's own dimming animation after a key press
-const DEBOUNCE: Duration = Duration::from_millis(150); // a key press may arrive just after the system dims
+const FAST_AFTER_KEY: Duration = Duration::from_millis(600); // keep updating every frame after a key press, so synced screens follow macOS's dimming
+const DEBOUNCE: Duration = Duration::from_millis(60); // macOS's dimming must stand still this long before Glow moves it into the boost
 const SETTLE: Duration = Duration::from_millis(400); // after we set the system brightness, trust our value over read-backs
 const READBACK_NOISE: f32 = 0.01; // a read-back this close to Glow's last write is not an outside change
 const LINGER: Duration = Duration::from_secs(1); // keep HDR awake briefly after returning to 100%, so the fade-out finishes
@@ -62,11 +62,13 @@ pub struct Core {
     sys_goal: Option<f32>, // system/software brightness we're fading to after a key press
     key_moved: bool,       // a brightness key was handled this step (the indicator shows)
     last_sys: Option<f32>,
-    hold_until: Option<Instant>,
     drop_since: Option<Instant>,
+    prev_read: Option<f32>, // the last read-back seen while waiting for macOS's dimming to stop
     own_until: Option<Instant>,
     last_step: Option<Instant>,
     fast_until: Option<Instant>, // a key press keeps fast mode on until then
+    dim_applied: f32,            // dimming the synced screens show now, fading toward the system value
+    dim_moving: bool,
     busy: bool,                  // the last step wrote a screen
     boost_applied: f32,          // boost level the screens show now, fading toward `level`
     dragging: bool,              // the pointer is down on the brightness bar
@@ -125,8 +127,10 @@ impl Core {
         self.follow_system();
         // Ease one total toward the goal, then split it: the system part and the boost part move together.
         let sys_now = self.last_sys.unwrap_or(self.soft_sys);
+        let mut own_fade = false;
         let goal_boost = if self.on { self.level } else { 0.0 };
         if self.sys_goal.is_some() || self.boost_applied != goal_boost {
+            own_fade = true;
             let goal_sys = self.sys_goal.unwrap_or(sys_now);
             let next = boost::ease(sys_now + self.boost_applied, goal_sys + goal_boost, dt);
             let (s, l) = if next == goal_sys + goal_boost { (goal_sys, goal_boost) } else { split(next) };
@@ -154,7 +158,12 @@ impl Core {
         let active = self.on && (self.level > 0.0 || self.boost_applied > 0.0 || self.dragging || self.zero_since.is_some_and(|t| t.elapsed() < LINGER));
         self.booster.set_on(active);
 
-        let dim_level = if self.sync { self.last_sys.unwrap_or(self.soft_sys) } else { 1.0 };
+        // Our own fades are already eased. A change that macOS made (brightness keys) arrives in jumps,
+        // so the synced screens fade to it instead of stepping.
+        let dim_goal = if self.sync { self.last_sys.unwrap_or(self.soft_sys) } else { 1.0 };
+        self.dim_applied = if own_fade { dim_goal } else { boost::ease(self.dim_applied, dim_goal, dt) };
+        self.dim_moving = self.dim_applied != dim_goal;
+        let dim_level = self.dim_applied;
         self.busy = self.booster.tick(self.boost_applied, dim_level, self.sync);
         self.was_fast = self.fast();
     }
@@ -174,6 +183,7 @@ impl Core {
         self.sys_goal.is_some()
             || self.boost_applied != if self.on { self.level } else { 0.0 }
             || self.dragging
+            || self.dim_moving
             || self.busy
             || self.fast_until.is_some_and(|t| Instant::now() < t)
     }
@@ -226,52 +236,41 @@ impl Core {
         }
     }
 
-    /// Keep the system at full brightness for a moment, so its own dimming doesn't eat the boost.
-    fn hold(&mut self) {
-        self.hold_until = Some(Instant::now() + HOLD);
-        self.drop_since = None;
-        self.booster.set_system_brightness(1.0);
-        self.last_sys = Some(1.0);
-    }
-
     /// Keep the boost, synced displays, and system brightness keys / Control Center working as one control.
     fn follow_system(&mut self) {
-        let (mut ups, mut downs) = self.booster.take_key_presses();
+        let (mut ups, downs) = self.booster.take_key_presses();
         if ups + downs > 0 {
-            self.fast_until = Some(Instant::now() + HOLD);
-        }
-        if downs > 0 && !(self.on && self.level > 0.0) {
-            self.hold_until = None; // nothing to take off the boost: macOS's dimming stands
+            self.trace(&format!("key up={ups} down={downs} age={:.1}ms sys={:?}", self.booster.key_age_ms(), self.booster.system_brightness()), self.last_sys.unwrap_or(0.0), self.boost_applied);
+            self.fast_until = Some(Instant::now() + FAST_AFTER_KEY);
         }
         if self.takes_all_keys() && ups + downs > 0 {
             self.nudge(ups - downs);
-            (ups, downs) = (0, 0);
+            ups = 0;
         }
         let sys = self.booster.system_brightness();
         let boosted = self.on && self.level > 0.0;
-        if downs > 0 && boosted {
-            // Brightness-down while boosted: one step off the boost, the system stays at full.
-            self.level = (self.level - downs as f32 / STEPS).max(0.0);
-            self.hold();
-        } else if self.hold_until.is_some_and(|t| Instant::now() < t) {
-            if sys.is_some_and(|s| s < 0.999) {
-                self.booster.set_system_brightness(1.0);
-            }
-            self.last_sys = Some(1.0);
-        } else if self.dragging || self.sys_goal.is_some() || self.own_until.is_some_and(|t| Instant::now() < t) {
+        if self.dragging || self.sys_goal.is_some() || self.own_until.is_some_and(|t| Instant::now() < t) {
             // Our own change is running or settling: keep our value so the slider doesn't jump.
         } else if let (Some(now), Some(last)) = (sys, self.last_sys) {
             if boosted && now < last - READBACK_NOISE {
-                // Dimmed another way (Control Center): take it out of the boost first, by the same amount.
+                // Dimmed by macOS (a brightness key or Control Center): take it out of the boost first, by the same amount.
+                // The timer restarts whenever macOS is still moving, so Glow never writes against its animation.
+                if self.prev_read.is_none_or(|p| (now - p).abs() > 0.0005) {
+                    self.drop_since = Some(Instant::now());
+                    self.prev_read = Some(now);
+                }
                 let t = *self.drop_since.get_or_insert_with(Instant::now);
                 if t.elapsed() >= DEBOUNCE {
                     self.drop_since = None;
+                    self.prev_read = None;
+                    self.last_sys = Some(now); // macOS really is here; move the dimming into the boost
                     self.set_total(1.0 + self.level - (last - now));
                 }
             } else {
                 self.drop_since = None;
-                if (now - last).abs() > READBACK_NOISE {
-                    self.last_sys = Some(now); // smaller differences are read-back noise
+                if (now - last).abs() > 0.0005 {
+                    self.last_sys = Some(now); // follow macOS's own change; synced screens fade to it
+                    self.trace("follow", now, self.boost_applied);
                 }
             }
         } else {
@@ -664,11 +663,13 @@ fn main() -> eframe::Result {
                 #[cfg(not(target_os = "macos"))]
                 show_hud: false,
                 last_sys: None,
-                hold_until: None,
                 drop_since: None,
+                prev_read: None,
                 own_until: None,
                 last_step: None,
                 fast_until: None,
+                dim_applied: 1.0,
+                dim_moving: false,
                 busy: false,
                 boost_applied: 0.0,
                 dragging: false,

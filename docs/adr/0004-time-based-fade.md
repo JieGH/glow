@@ -8,7 +8,7 @@ Status: accepted (#3, #4)
 ## Decision
 Each update moves `1 − exp(−dt / FADE_TAU)` of the remaining distance. The first update after idle uses one frame for `dt`. A speed cap (proposed 3.0 total/s) limits single-frame jumps.
 
-`FADE_TAU` is 40 ms (a step lands in ~120 ms), shared by #3 and #4. Tune by eye only if it looks wrong. Speed cap: 3.0 total/s.
+`FADE_TAU` is 25 ms (a step lands in ~80 ms), shared by #3 and #4. It started at 40 ms; keys felt delayed, so it was cut. Tune by eye. Speed cap: 3.0 total/s.
 
 ## Consequences
 - The update rate can change freely.

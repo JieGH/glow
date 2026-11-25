@@ -25,7 +25,6 @@ Glow's domain terms. Use these words in code, issues, and docs.
 - **Fade**: the timed move from applied brightness to the goal.
 - **Fast mode**: the short period when Glow updates every display frame.
 - **Idle cadence**: Glow's slow background update rate (~14 Hz) when nothing is changing.
-- **Hold**: a short period after brightness-down while boosted, when Glow keeps the system brightness at full.
 - **Read-back**: a system brightness value Glow reads from macOS, as opposed to one it wrote.
 - **Settle window**: the time after Glow's own write during which read-backs are ignored.
 - **Key-to-photon latency**: time from a key press to the first visible change on screen.
