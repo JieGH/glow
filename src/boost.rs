@@ -87,11 +87,6 @@ impl Booster {
     pub fn take_key_presses(&self) -> (i32, i32) {
         (0, 0)
     }
-    pub fn set_intercept(&self, _up: bool, _down: bool) {}
-    pub fn watch_keys(&mut self) {}
-    pub fn keys_taken(&self) -> bool {
-        false
-    }
     pub fn rows(&self, _sync: bool, _dim_level: f32) -> Vec<Row> {
         vec![Row {
             name: "This computer".into(),
@@ -111,13 +106,11 @@ mod mac {
         NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSScreen, NSWindow,
         NSWindowCollectionBehavior, NSWindowStyleMask,
     };
-    use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRetained, CFRunLoop, CGSize};
+    use objc2_core_foundation::CGSize;
     use objc2_core_graphics::{
         kCGColorSpaceExtendedLinearDisplayP3, CGColorSpace, CGDisplayGammaTableCapacity,
-        CGDisplayIsBuiltin, CGDisplayRestoreColorSyncSettings, CGError, CGEvent, CGEventTapLocation,
-        CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
-        CGGetDisplayTransferByTable, CGPreflightPostEventAccess, CGRequestPostEventAccess,
-        CGSetDisplayTransferByTable,
+        CGDisplayIsBuiltin, CGDisplayRestoreColorSyncSettings, CGError,
+        CGGetDisplayTransferByTable, CGSetDisplayTransferByTable,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use objc2_metal::{
@@ -126,10 +119,9 @@ mod mac {
         MTLRenderPassDescriptor, MTLStoreAction,
     };
     use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
-    use std::cell::RefCell;
     use std::ffi::{c_char, c_void};
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use std::sync::atomic::{AtomicI32, Ordering};
     use std::sync::{Arc, OnceLock};
 
     const SCREEN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -167,7 +159,6 @@ mod mac {
         last_screen_sync: Instant,
         brightness_id: Option<u32>,
         keys: Arc<Keys>,
-        tap: Option<CFRetained<CFMachPort>>,
         _monitors: Vec<Retained<AnyObject>>,
         device: Option<Retained<ProtocolObject<dyn MTLDevice>>>,
         queue: Option<Retained<ProtocolObject<dyn MTLCommandQueue>>>,
@@ -235,7 +226,6 @@ mod mac {
                 last_screen_sync: Instant::now(),
                 brightness_id: None,
                 keys,
-                tap: None,
                 _monitors,
                 device: None,
                 queue: None,
@@ -279,24 +269,6 @@ mod mac {
         pub fn take_key_presses(&self) -> (i32, i32) {
             let c = &self.keys.count;
             (c[0].swap(0, Ordering::Relaxed), c[1].swap(0, Ordering::Relaxed))
-        }
-
-        /// Take over the brightness keys (once permission is given).
-        pub fn watch_keys(&mut self) {
-            if self.tap.is_none() {
-                self.tap = intercept_brightness_keys(&self.keys);
-            }
-        }
-
-        /// Whether Glow can take brightness keys before macOS sees them (permission given).
-        pub fn keys_taken(&self) -> bool {
-            self.tap.is_some()
-        }
-
-        /// Which brightness keys (up, down) Glow takes over before macOS sees them.
-        pub fn set_intercept(&self, up: bool, down: bool) {
-            self.keys.intercept[0].store(up, Ordering::Relaxed);
-            self.keys.intercept[1].store(down, Ordering::Relaxed);
         }
 
         /// Keep one entry per connected screen.
@@ -393,7 +365,6 @@ mod mac {
             }
             self.on = on;
             if on {
-                self.watch_keys();
                 self.sync_screens();
                 if self.device.is_none() {
                     self.device = MTLCreateSystemDefaultDevice();
@@ -740,8 +711,6 @@ mod mac {
     #[derive(Default)]
     pub struct Keys {
         count: [AtomicI32; 2],      // presses seen: [up, down]
-        intercept: [AtomicBool; 2], // keys to take over: [up, down]
-        tap: RefCell<Option<CFRetained<CFMachPort>>>,
     }
 
     /// A brightness key event: (0 = up / 1 = down, pressed down?).
@@ -753,52 +722,6 @@ mod mac {
         let d = e.data1();
         let key = (d >> 16) & 0xFFFF;
         (key == 2 || key == 3).then(|| ((key - 2) as usize, (d >> 8) & 0xFF == 0xA))
-    }
-
-    unsafe extern "C-unwind" fn on_key(
-        _: CGEventTapProxy,
-        ty: CGEventType,
-        ev: NonNull<CGEvent>,
-        info: *mut c_void,
-    ) -> *mut CGEvent {
-        let keys = unsafe { &*(info as *const Keys) };
-        if ty == CGEventType::TapDisabledByTimeout || ty == CGEventType::TapDisabledByUserInput {
-            if let Some(t) = keys.tap.borrow().as_deref() {
-                CGEvent::tap_enable(t, true);
-            }
-        } else if let Some((i, pressed)) =
-            NSEvent::eventWithCGEvent(unsafe { ev.as_ref() }).as_deref().and_then(brightness_key)
-        {
-            if keys.intercept[i].load(Ordering::Relaxed) {
-                if pressed {
-                    keys.count[i].fetch_add(1, Ordering::Relaxed);
-                }
-                return std::ptr::null_mut(); // macOS never sees it, so the screen doesn't dim first
-            }
-        }
-        ev.as_ptr()
-    }
-
-    /// Take over the brightness keys while boosting or syncing. Needs Accessibility permission (macOS asks once);
-    /// without it the key watchers above still work.
-    fn intercept_brightness_keys(keys: &Arc<Keys>) -> Option<CFRetained<CFMachPort>> {
-        if !CGPreflightPostEventAccess() && !CGRequestPostEventAccess() {
-            return None;
-        }
-        let tap = unsafe {
-            CGEvent::tap_create(
-                CGEventTapLocation::SessionEventTap,
-                CGEventTapPlacement::HeadInsertEventTap,
-                CGEventTapOptions::Default,
-                1 << 14, // system-defined events (media keys)
-                Some(on_key),
-                Arc::as_ptr(keys) as *mut c_void,
-            )
-        }?;
-        let src = CFMachPort::new_run_loop_source(None, Some(&tap), 0)?;
-        CFRunLoop::main()?.add_source(Some(&src), unsafe { kCFRunLoopCommonModes });
-        *keys.tap.borrow_mut() = Some(tap.clone());
-        Some(tap)
     }
 
     /// Fallback click-through black overlay for displays whose gamma table cannot be read.
