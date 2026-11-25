@@ -1,4 +1,5 @@
 mod boost;
+mod update;
 #[cfg(target_os = "macos")]
 mod tray;
 
@@ -73,6 +74,7 @@ pub struct Core {
     boost_applied: f32,          // boost level the screens show now, fading toward `level`
     dragging: bool,              // the pointer is down on the brightness bar
     was_fast: bool,
+    update: update::Shared,
 }
 
 struct App {
@@ -556,6 +558,22 @@ impl eframe::App for App {
                     },
                 );
             });
+            ui.add_space(6.0);
+            let status = c.update.lock().unwrap().clone();
+            let (label, color) = match &status {
+                update::Status::Available(v) => (format!("Update available: {v}. Download"), ACCENT),
+                update::Status::Checking => ("Checking for updates…".to_string(), Color32::from_gray(140)),
+                update::Status::UpToDate => (format!("Up to date (v{})", env!("CARGO_PKG_VERSION")), Color32::from_gray(140)),
+                update::Status::Failed => ("Couldn't check. Try again".to_string(), Color32::from_gray(140)),
+                update::Status::Idle => ("Check for updates".to_string(), Color32::from_gray(140)),
+            };
+            if ui.add(egui::Button::new(RichText::new(label).size(11.0).color(color)).frame(false)).clicked() {
+                match status {
+                    update::Status::Available(_) => update::open_page(),
+                    update::Status::Checking => {}
+                    _ => update::check_now(&c.update, ctx),
+                }
+            }
             ui.cursor().top() // where the next widget would go = end of content
         });
         let bottom = resp.inner + margin.bottom as f32;
@@ -674,6 +692,7 @@ fn main() -> eframe::Result {
                 boost_applied: 0.0,
                 dragging: false,
                 was_fast: false,
+                update: update::start(cc.egui_ctx.clone()),
             }));
             #[cfg(target_os = "macos")]
             let tray = if shot.is_none() { tray::Tray::new(cc.egui_ctx.clone(), core.clone()) } else { None };
