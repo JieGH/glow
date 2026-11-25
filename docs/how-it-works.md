@@ -40,13 +40,13 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
 - Glow needs no privacy permission. It watches brightness key presses without taking them, so
   macOS always dims first and shows its own indicator. Glow follows and corrects:
   - Brightness-down while boosted: macOS dims the screen one step and Glow can't stop it (it
-    ignores Glow's writes to the system brightness). After 150 ms, once the dimming has settled,
-    Glow moves it into the boost: system back to full, boost down by the same amount.
+    ignores Glow's writes to the system brightness). Once the dimming has stood still for 60 ms
+    (it restarts while macOS is still moving), Glow moves it into the boost: system back to full, boost down by the same amount.
   - Brightness-up at full brightness adds one step of boost.
   - With no screen that has its own brightness (lid closed, external displays only) and Sync on,
     macOS ignores the keys, so Glow moves the total one step across 0–200% itself.
   - Lowering the brightness another way (Control Center) while boosted takes the boost down by the
-    same amount, after 150 ms in case a key press is on its way.
+    same amount, after the same 60 ms wait.
 - After Glow sets the system brightness itself, it trusts its own value for 0.4 s so the slider
   doesn't jump.
 
