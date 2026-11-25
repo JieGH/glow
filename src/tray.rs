@@ -25,6 +25,7 @@ const POPUP_FADE: Duration = Duration::from_millis(300);
 // is responsive enough for key presses while still letting an idle app sleep.
 const BACKGROUND_INTERVAL: f64 = 1.0 / 14.375;
 const HIDDEN_KEY: &str = "hideIndicator";
+const BOOST_ON_KEY: &str = "enableAutoBoost";
 const SYNC_OFF_KEY: &str = "disableSyncDimming";
 
 /// Whether the person turned the pop-up off (remembered between launches; on by default).
@@ -34,6 +35,15 @@ pub fn hidden_saved() -> bool {
 
 pub fn save_hidden(hidden: bool) {
     NSUserDefaults::standardUserDefaults().setBool_forKey(hidden, &NSString::from_str(HIDDEN_KEY));
+}
+
+/// Whether the person turned auto boost on (remembered between launches; off by default).
+pub fn boost_on_saved() -> bool {
+    NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str(BOOST_ON_KEY))
+}
+
+pub fn save_boost_on(on: bool) {
+    NSUserDefaults::standardUserDefaults().setBool_forKey(on, &NSString::from_str(BOOST_ON_KEY));
 }
 
 /// Whether the person turned synced display dimming off (remembered between launches; on by default).
@@ -104,6 +114,7 @@ define_class!(
         fn toggle_boost(&self, _sender: Option<&AnyObject>) {
             if let Ok(mut c) = self.ivars().core.try_borrow_mut() {
                 c.on = !c.on;
+                save_boost_on(c.on);
             }
             self.ivars().ctx.request_repaint();
         }
@@ -332,7 +343,20 @@ fn place(window: &NSWindow, item: &NSStatusItem, mtm: MainThreadMarker) {
 
 #[cfg(test)]
 mod tests {
-    use super::Popup;
+    use super::*;
+
+    #[test]
+    fn auto_boost_is_off_by_default_and_remembered() {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        defaults.removeObjectForKey(&NSString::from_str(BOOST_ON_KEY));
+        assert!(!boost_on_saved()); // nothing saved: off
+        save_boost_on(true);
+        assert!(boost_on_saved());
+        save_boost_on(false);
+        assert!(!boost_on_saved());
+        defaults.removeObjectForKey(&NSString::from_str(BOOST_ON_KEY)); // leave the test run's settings clean
+    }
+
     #[test]
     fn pops_on_keys_and_boost_changes_only() {
         let mut p = Popup::default();

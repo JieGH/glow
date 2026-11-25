@@ -386,6 +386,8 @@ impl eframe::App for App {
         });
         if space {
             c.on = !c.on;
+            #[cfg(target_os = "macos")]
+            tray::save_boost_on(c.on);
         }
         // Show the value we last set or read, not a mid-change read-back, so the slider stays still.
         let sys = c.current_sys();
@@ -439,9 +441,14 @@ impl eframe::App for App {
                     egui::vec2(ui.available_width(), 20.0),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        toggle(ui, &mut c.on).on_hover_text(
-                            "Auto boost: pressing brightness-up at full brightness goes past 100% (Space)",
+                        let r = toggle(ui, &mut c.on).on_hover_text(
+                            "Auto boost (off by default): pressing brightness-up at full brightness goes past 100%, for bright rooms (Space)",
                         );
+                        #[cfg(target_os = "macos")]
+                        if r.changed() {
+                            tray::save_boost_on(c.on);
+                        }
+                        let _ = r;
                     },
                 );
             });
@@ -666,7 +673,10 @@ fn main() -> eframe::Result {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             let core = Rc::new(RefCell::new(Core {
                 booster: boost::Booster::new(),
-                on: true, // armed from the start, at plain 100%: nothing changes until brightness goes past full
+                #[cfg(target_os = "macos")]
+                on: tray::boost_on_saved(), // off until the person turns it on
+                #[cfg(not(target_os = "macos"))]
+                on: false,
                 #[cfg(target_os = "macos")]
                 sync: !tray::sync_disabled_saved(),
                 #[cfg(not(target_os = "macos"))]
