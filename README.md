@@ -16,7 +16,7 @@ Click the sun in the menu bar. A small panel opens under it.
 
 <table>
 <tr>
-<td width="320" valign="top"><img src="docs/images/panel.png" width="300" alt="The Glow panel"></td>
+<td width="320" valign="top"><img src="docs/images/panel-150.png" width="300" alt="The Glow panel"></td>
 <td valign="top">
 
 - A big percentage, such as **150%**.
