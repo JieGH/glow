@@ -67,6 +67,8 @@ pub struct Core {
     own_until: Option<Instant>,
     last_step: Option<Instant>,
     fast_until: Option<Instant>, // a key press keeps fast mode on until then
+    dim_applied: f32,            // dimming the synced screens show now, fading toward the system value
+    dim_moving: bool,
     busy: bool,                  // the last step wrote a screen
     boost_applied: f32,          // boost level the screens show now, fading toward `level`
     dragging: bool,              // the pointer is down on the brightness bar
@@ -125,8 +127,10 @@ impl Core {
         self.follow_system();
         // Ease one total toward the goal, then split it: the system part and the boost part move together.
         let sys_now = self.last_sys.unwrap_or(self.soft_sys);
+        let mut own_fade = false;
         let goal_boost = if self.on { self.level } else { 0.0 };
         if self.sys_goal.is_some() || self.boost_applied != goal_boost {
+            own_fade = true;
             let goal_sys = self.sys_goal.unwrap_or(sys_now);
             let next = boost::ease(sys_now + self.boost_applied, goal_sys + goal_boost, dt);
             let (s, l) = if next == goal_sys + goal_boost { (goal_sys, goal_boost) } else { split(next) };
@@ -154,7 +158,12 @@ impl Core {
         let active = self.on && (self.level > 0.0 || self.boost_applied > 0.0 || self.dragging || self.zero_since.is_some_and(|t| t.elapsed() < LINGER));
         self.booster.set_on(active);
 
-        let dim_level = if self.sync { self.last_sys.unwrap_or(self.soft_sys) } else { 1.0 };
+        // Our own fades are already eased. A change that macOS made (brightness keys) arrives in jumps,
+        // so the synced screens fade to it instead of stepping.
+        let dim_goal = if self.sync { self.last_sys.unwrap_or(self.soft_sys) } else { 1.0 };
+        self.dim_applied = if own_fade { dim_goal } else { boost::ease(self.dim_applied, dim_goal, dt) };
+        self.dim_moving = self.dim_applied != dim_goal;
+        let dim_level = self.dim_applied;
         self.busy = self.booster.tick(self.boost_applied, dim_level, self.sync);
         self.was_fast = self.fast();
     }
@@ -174,6 +183,7 @@ impl Core {
         self.sys_goal.is_some()
             || self.boost_applied != if self.on { self.level } else { 0.0 }
             || self.dragging
+            || self.dim_moving
             || self.busy
             || self.fast_until.is_some_and(|t| Instant::now() < t)
     }
@@ -270,8 +280,9 @@ impl Core {
                 }
             } else {
                 self.drop_since = None;
-                if (now - last).abs() > READBACK_NOISE {
-                    self.last_sys = Some(now); // smaller differences are read-back noise
+                if (now - last).abs() > 0.0005 {
+                    self.last_sys = Some(now); // follow macOS's own change; synced screens fade to it
+                    self.trace("follow", now, self.boost_applied);
                 }
             }
         } else {
@@ -669,6 +680,8 @@ fn main() -> eframe::Result {
                 own_until: None,
                 last_step: None,
                 fast_until: None,
+                dim_applied: 1.0,
+                dim_moving: false,
                 busy: false,
                 boost_applied: 0.0,
                 dragging: false,
