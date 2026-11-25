@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-const ACCENT: Color32 = Color32::from_rgb(255, 196, 64);
+const ACCENT: Color32 = Color32::from_rgb(255, 140, 30);
 const DIM_DOT: Color32 = Color32::from_rgb(110, 180, 255);
 const BOOST_DOT: Color32 = Color32::from_rgb(80, 210, 120);
 const PANEL: Color32 = Color32::from_rgb(30, 30, 34);

@@ -1,18 +1,31 @@
 # Glow
 
-A macOS menu-bar app that gives you one brightness control from 0% to 200%.
+<img src="macos/icon.png" width="96" align="right" alt="Glow icon">
 
-- **0–100%** is your Mac's normal brightness.
-- **100–200%** boosts HDR-capable screens (such as MacBook Pro Liquid Retina XDR or Pro Display XDR) past their normal maximum.
-- **Synced dimming** dims every connected display together, including external monitors without their own brightness control.
-- **Brightness keys** keep working: press brightness-up at full brightness to go past 100%.
+Make your Mac screen brighter than it normally goes, and dim all your screens together. Glow lives in the menu bar.
 
-See [docs/how-it-works.md](docs/how-it-works.md) for details.
+## What it does
+
+- **Brighter than 100%.** On Macs with an XDR or HDR screen, slide past 100% for extra brightness.
+- **Dim everything together.** Turn down your laptop and external monitors with one slider.
+- **Your brightness keys still work.** Keep pressing brightness-up at full brightness to go brighter.
+
+## What it looks like
+
+Click the sun in the menu bar. A small panel opens under it:
+
+- A big percentage, such as **150%**.
+- One slider from 0% to 200%.
+- A list of your screens, each with its current state.
+- Two switches: **Sync all displays** and **Show on change**.
+- A **Quit** button. Quitting puts every screen back to normal.
+
+Right-click the sun for a short menu.
 
 ## Requirements
 
 - macOS 13 or later.
-- An HDR-capable screen for the boost. Synced dimming works on any display.
+- An XDR or HDR screen for the extra brightness. Dimming works on any display.
 
 ## Install
 
@@ -25,9 +38,8 @@ See [docs/how-it-works.md](docs/how-it-works.md) for details.
 
 ## Use
 
-- **Left click** the sun icon to open the controls.
-- **Right click** for a menu with Boost, Display Sync and Quit.
-- **Quit** restores every screen.
+- **Click** the sun to open the panel.
+- **Right-click** the sun for the menu.
 
 ## Build from source
 
