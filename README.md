@@ -6,9 +6,9 @@ Make your Mac screen brighter than it normally goes, and dim all your screens to
 
 ## What it does
 
-- **Brighter than 100%.** On Macs with an XDR or HDR screen, slide past 100% for extra brightness.
+- **Brighter than 100%.** On Macs with an XDR or HDR screen, slide past 100% for extra brightness. Glow opens at 120%.
 - **Dim everything together.** Turn down your laptop and external monitors with one slider.
-- **Your brightness keys still work.** Turn on the switch at the top of the panel, and pressing brightness-up at full brightness goes brighter. It is off by default, so nothing changes until you choose it. Handy in a bright room.
+- **Your brightness keys still work.** Pressing brightness-up at full brightness goes brighter. Handy in a bright room. Turn the switch at the top of the panel off to stop it.
 
 ## What it looks like
 

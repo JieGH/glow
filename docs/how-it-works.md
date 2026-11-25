@@ -27,8 +27,8 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
 
 - Glow reads and sets the system brightness through `DisplayServices`, a private macOS framework
   loaded at run time. This is why Glow isn't on the Mac App Store.
-- Auto boost is off by default and the choice is saved between launches. With it on, Glow starts
-  armed at plain 100%, and pressing brightness-up at full brightness goes past 100%.
+- Glow opens at 120% (`LAUNCH_LEVEL`) with auto boost on. The switch is not saved between launches.
+  With it on, pressing brightness-up at full brightness goes past 100%.
 - One key press moves 1/16 of the range. Changes fade by elapsed time: each update covers
   `1 − exp(−dt / FADE_TAU)` of the remaining distance (`FADE_TAU` = 25 ms), so a step lands in
   about 80 ms at any update rate. The total moves at most 3.0 per second (`SPEED_CAP`).

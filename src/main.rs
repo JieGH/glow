@@ -12,6 +12,7 @@ const ACCENT: Color32 = Color32::from_rgb(255, 140, 30);
 const DIM_DOT: Color32 = Color32::from_rgb(110, 180, 255);
 const BOOST_DOT: Color32 = Color32::from_rgb(80, 210, 120);
 const PANEL: Color32 = Color32::from_rgb(30, 30, 34);
+const LAUNCH_LEVEL: f32 = 1.2; // brightness set when Glow opens (120%)
 const STEPS: f32 = 16.0; // tunable: one brightness key step = 1/16 of the brightness range
 const FAST_AFTER_KEY: Duration = Duration::from_millis(600); // keep updating every frame after a key press, so synced screens follow macOS's dimming
 const DEBOUNCE: Duration = Duration::from_millis(60); // macOS's dimming must stand still this long before Glow moves it into the boost
@@ -386,8 +387,6 @@ impl eframe::App for App {
         });
         if space {
             c.on = !c.on;
-            #[cfg(target_os = "macos")]
-            tray::save_boost_on(c.on);
         }
         // Show the value we last set or read, not a mid-change read-back, so the slider stays still.
         let sys = c.current_sys();
@@ -441,14 +440,9 @@ impl eframe::App for App {
                     egui::vec2(ui.available_width(), 20.0),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        let r = toggle(ui, &mut c.on).on_hover_text(
-                            "Auto boost (off by default): pressing brightness-up at full brightness goes past 100%, for bright rooms (Space)",
+                        toggle(ui, &mut c.on).on_hover_text(
+                            "Auto boost: pressing brightness-up at full brightness goes past 100%, for bright rooms (Space)",
                         );
-                        #[cfg(target_os = "macos")]
-                        if r.changed() {
-                            tray::save_boost_on(c.on);
-                        }
-                        let _ = r;
                     },
                 );
             });
@@ -673,10 +667,7 @@ fn main() -> eframe::Result {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             let core = Rc::new(RefCell::new(Core {
                 booster: boost::Booster::new(),
-                #[cfg(target_os = "macos")]
-                on: tray::boost_on_saved(), // off until the person turns it on
-                #[cfg(not(target_os = "macos"))]
-                on: false,
+                on: true, // every launch starts boosted (see LAUNCH_LEVEL); the switch is not remembered
                 #[cfg(target_os = "macos")]
                 sync: !tray::sync_disabled_saved(),
                 #[cfg(not(target_os = "macos"))]
@@ -704,6 +695,9 @@ fn main() -> eframe::Result {
                 was_fast: false,
                 update: update::start(cc.egui_ctx.clone()),
             }));
+            if shot.is_none() {
+                core.borrow_mut().set_total(LAUNCH_LEVEL); // not for screenshots: don't change the screen
+            }
             #[cfg(target_os = "macos")]
             let tray = if shot.is_none() { tray::Tray::new(cc.egui_ctx.clone(), core.clone()) } else { None };
             Ok(Box::new(App {
