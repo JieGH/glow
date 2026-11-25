@@ -38,27 +38,56 @@ Right-click the sun for a short menu.
 
 ## Install
 
-1. Download `Glow.zip` from [Releases](https://github.com/JieGH/glow/releases) and unzip it.
-2. Move `Glow.app` to `/Applications`.
-3. Glow is ad-hoc signed, not notarized, so macOS blocks the first launch. To open it anyway,
-   try to open it once, then go to **System Settings → Privacy & Security** and click
-   **Open Anyway**. Or remove the download flag in Terminal:
-   `xattr -dr com.apple.quarantine /Applications/Glow.app`
+Glow is not notarized by Apple, so a downloaded copy shows an "unverified developer" warning.
+To avoid the warning, build it yourself (Option 1). An app you build on your own Mac opens with a
+normal double-click.
+
+### Option 1: Build it yourself (no warning)
+
+1. Open **Terminal** and install Apple's command-line tools. Skip this if you have them.
+
+   ```sh
+   xcode-select --install
+   ```
+
+2. Install [Rust](https://rustup.rs):
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+   Then close and reopen Terminal.
+
+3. Download Glow and build it:
+
+   ```sh
+   git clone https://github.com/JieGH/glow.git
+   cd glow
+   scripts/build-app.sh
+   ```
+
+   The first build takes a few minutes.
+
+4. Move the app to Applications and open it:
+
+   ```sh
+   cp -R dist/Glow.app /Applications/
+   open /Applications/Glow.app
+   ```
+
+To update later, run `git pull`, then steps 3 and 4 again.
+
+### Option 2: Download it (shows a warning)
+
+1. Download `Glow.dmg` (or `Glow.zip`) from [Releases](https://github.com/JieGH/glow/releases).
+2. Open the dmg and drag **Glow** to **Applications**. For the zip, unzip it and move `Glow.app` there.
+3. Open Glow. macOS blocks it the first time. Go to **System Settings → Privacy & Security**,
+   scroll down and click **Open Anyway**.
 
 ## Use
 
 - **Click** the sun to open the panel.
 - **Right-click** the sun for the menu.
-
-## Build from source
-
-Install [Rust](https://rustup.rs), then:
-
-```sh
-cargo test
-scripts/build-app.sh   # builds and ad-hoc signs dist/Glow.app
-open dist/Glow.app
-```
 
 ## A note on private APIs
 
