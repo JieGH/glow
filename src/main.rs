@@ -15,6 +15,7 @@ const STEPS: f32 = 16.0; // tunable: one brightness key step = 1/16 of the brigh
 const HOLD: Duration = Duration::from_millis(600); // ignore the system's own dimming animation after a key press
 const DEBOUNCE: Duration = Duration::from_millis(150); // a key press may arrive just after the system dims
 const SETTLE: Duration = Duration::from_millis(400); // after we set the system brightness, trust our value over read-backs
+const READBACK_NOISE: f32 = 0.01; // a read-back this close to Glow's last write is not an outside change
 const LINGER: Duration = Duration::from_secs(1); // keep HDR awake briefly after returning to 100%, so the fade-out finishes
 const ARROW: f32 = 10.0; // bubble pointer height
 const BUBBLE: [f32; 2] = [300.0, 340.0]; // the panel fits its content; the rest stays transparent
@@ -66,7 +67,9 @@ pub struct Core {
     own_until: Option<Instant>,
     last_step: Option<Instant>,
     fast_until: Option<Instant>, // a key press keeps fast mode on until then
-    busy: bool,                  // some output is still fading
+    busy: bool,                  // the last step wrote a screen
+    boost_applied: f32,          // boost level the screens show now, fading toward `level`
+    dragging: bool,              // the pointer is down on the brightness bar
     was_fast: bool,
 }
 
@@ -120,41 +123,59 @@ impl Core {
             self.level = 0.0; // switched off: back to plain/synced brightness up to 100%
         }
         self.follow_system();
-        // Fade the system (or software) brightness to where a key press sent it.
-        if let Some(goal) = self.sys_goal {
-            if let Some(cur) = self.last_sys {
-                let next = boost::ease(cur, goal, dt);
-                self.booster.set_system_brightness(next);
-                self.last_sys = Some(next);
-                self.own_until = Some(Instant::now() + SETTLE);
-                if next == goal {
-                    self.sys_goal = None;
+        // Ease one total toward the goal, then split it: the system part and the boost part move together.
+        let sys_now = self.last_sys.unwrap_or(self.soft_sys);
+        let goal_boost = if self.on { self.level } else { 0.0 };
+        if self.sys_goal.is_some() || self.boost_applied != goal_boost {
+            let goal_sys = self.sys_goal.unwrap_or(sys_now);
+            let next = boost::ease(sys_now + self.boost_applied, goal_sys + goal_boost, dt);
+            let (s, l) = if next == goal_sys + goal_boost { (goal_sys, goal_boost) } else { split(next) };
+            if self.last_sys.is_some() {
+                if (s - sys_now).abs() > 0.0005 || s == goal_sys {
+                    self.booster.set_system_brightness(s);
+                    self.last_sys = Some(s);
+                    self.own_until = Some(Instant::now() + SETTLE);
                 }
             } else {
-                let next = boost::ease(self.soft_sys, goal, dt);
-                self.soft_sys = next;
-                if next == goal {
-                    self.sys_goal = None;
-                }
+                self.soft_sys = s;
             }
+            self.boost_applied = l;
+            if s == goal_sys && l == goal_boost {
+                self.sys_goal = None;
+            }
+            self.trace("fade", s, l);
         }
         // HDR only wakes while there is a boost to show; at or below 100% the HDR trigger sleeps.
-        if self.level > 0.0 {
-            self.zero_since = None;
+        if self.level > 0.0 || self.boost_applied > 0.0 || self.dragging {
+            self.zero_since = None; // a drag keeps HDR awake until release, so crossing 100% doesn't toggle it
         } else {
             self.zero_since.get_or_insert_with(Instant::now);
         }
-        let active = self.on && (self.level > 0.0 || self.zero_since.is_some_and(|t| t.elapsed() < LINGER));
+        let active = self.on && (self.level > 0.0 || self.boost_applied > 0.0 || self.dragging || self.zero_since.is_some_and(|t| t.elapsed() < LINGER));
         self.booster.set_on(active);
 
         let dim_level = if self.sync { self.last_sys.unwrap_or(self.soft_sys) } else { 1.0 };
-        self.busy = self.booster.tick(self.level, dim_level, self.sync, dt);
+        self.busy = self.booster.tick(self.boost_applied, dim_level, self.sync);
         self.was_fast = self.fast();
+    }
+
+    /// Log every applied value to stderr when GLOW_TRACE is set.
+    fn trace(&self, what: &str, sys: f32, boost: f32) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ON.get_or_init(|| std::env::var_os("GLOW_TRACE").is_some()) {
+            static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+            let t = START.get_or_init(Instant::now).elapsed().as_secs_f64();
+            eprintln!("{t:.4} {what} sys={sys:.4} boost={boost:.4} drag={}", self.dragging);
+        }
     }
 
     /// Whether the next step should come a frame later: a fade is running or a key was just pressed.
     pub fn fast(&self) -> bool {
-        self.sys_goal.is_some() || self.busy || self.fast_until.is_some_and(|t| Instant::now() < t)
+        self.sys_goal.is_some()
+            || self.boost_applied != if self.on { self.level } else { 0.0 }
+            || self.dragging
+            || self.busy
+            || self.fast_until.is_some_and(|t| Instant::now() < t)
     }
 
     /// With no screen that has system brightness, macOS ignores the keys, so Glow steps the total itself.
@@ -237,10 +258,10 @@ impl Core {
                 self.booster.set_system_brightness(1.0);
             }
             self.last_sys = Some(1.0);
-        } else if self.own_until.is_some_and(|t| Instant::now() < t) {
-            // Our own slider/arrow change is settling: keep our value so the slider doesn't jump.
+        } else if self.dragging || self.sys_goal.is_some() || self.own_until.is_some_and(|t| Instant::now() < t) {
+            // Our own change is running or settling: keep our value so the slider doesn't jump.
         } else if let (Some(now), Some(last)) = (sys, self.last_sys) {
-            if boosted && now < last - 0.001 {
+            if boosted && now < last - READBACK_NOISE {
                 // Dimmed another way (Control Center): take it out of the boost first, by the same amount.
                 let t = *self.drop_since.get_or_insert_with(Instant::now);
                 if t.elapsed() >= DEBOUNCE {
@@ -249,7 +270,9 @@ impl Core {
                 }
             } else {
                 self.drop_since = None;
-                self.last_sys = Some(now);
+                if (now - last).abs() > READBACK_NOISE {
+                    self.last_sys = Some(now); // smaller differences are read-back noise
+                }
             }
         } else {
             self.last_sys = sys;
@@ -337,6 +360,9 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         if let (Some(t), true) = (&self.tray, self.was_focused && !focused) {
             t.hide();
+            if let Ok(mut c) = self.core.try_borrow_mut() {
+                c.dragging = false; // the panel closed mid-drag
+            }
         }
         self.was_focused = focused;
 
@@ -451,6 +477,7 @@ impl eframe::App for App {
             let bar = brightness_bar(ui, &mut t, max).on_hover_text(
                 "Lower below 100% to dim all displays together; raise past 100% to boost HDR screens",
             );
+            c.dragging = bar.is_pointer_button_down_on();
             if bar.changed() {
                 c.set_total(t);
             }
@@ -643,6 +670,8 @@ fn main() -> eframe::Result {
                 last_step: None,
                 fast_until: None,
                 busy: false,
+                boost_applied: 0.0,
+                dragging: false,
                 was_fast: false,
             }));
             #[cfg(target_os = "macos")]
