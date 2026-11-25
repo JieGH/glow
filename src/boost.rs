@@ -17,7 +17,7 @@ pub const GAMMA_DRIFT: f32 = 0.03;
 pub const TRIGGER_VALUE: f64 = 1.6;
 pub const TRIGGER_SIZE: f64 = 5.0;
 pub const SPEED_CAP: f32 = 3.0; // most the total moves per second (0–100% takes at least 0.33 s)
-pub const FADE_TAU: f32 = 0.040; // seconds; a step lands in ~120 ms, whatever the update rate
+pub const FADE_TAU: f32 = 0.025; // seconds; a step lands in ~80 ms, whatever the update rate
 pub const DIM_FLOOR: f32 = 0.05; // minimum software gamma scale at 0% (dark, yet never strands the screen)
 
 /// Move the applied value toward the target by the time `dt` (seconds) that passed, at most `SPEED_CAP`, snapping when close.
@@ -76,6 +76,9 @@ impl Booster {
         false
     }
     pub fn on_key(&self, _wake: Box<dyn Fn()>) {}
+    pub fn key_age_ms(&self) -> f64 {
+        0.0
+    }
     pub fn headroom(&self) -> f64 {
         1.0
     }
@@ -130,7 +133,7 @@ mod mac {
     use std::ffi::{c_char, c_void};
     use std::ptr::NonNull;
     use std::cell::RefCell;
-    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
     use std::sync::{Arc, OnceLock};
 
     const SCREEN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -272,6 +275,12 @@ mod mac {
                 .iter()
                 .filter(|d| !d.has_hw_brightness || Some(d.id) != self.brightness_id)
                 .count()
+        }
+
+        /// Milliseconds from the last key press (its event time) until now.
+        pub fn key_age_ms(&self) -> f64 {
+            let t = f64::from_bits(self.keys.stamp.load(Ordering::Relaxed));
+            (objc2_foundation::NSProcessInfo::processInfo().systemUptime() - t) * 1000.0
         }
 
         /// Run `wake` on the main thread each time a brightness key press is counted.
@@ -708,6 +717,7 @@ mod mac {
         let k = keys.clone();
         let seen = move |e: NonNull<NSEvent>| {
             if let Some((i, true)) = brightness_key(unsafe { e.as_ref() }) {
+                k.stamp.store(unsafe { e.as_ref() }.timestamp().to_bits(), Ordering::Relaxed);
                 k.count[i].fetch_add(1, Ordering::Relaxed);
                 if let Some(w) = k.wake.borrow().as_ref() {
                     w();
@@ -736,6 +746,7 @@ mod mac {
     pub struct Keys {
         count: [AtomicI32; 2],      // presses seen: [up, down]
         wake: RefCell<Option<Box<dyn Fn()>>>, // runs on each counted press
+        stamp: AtomicU64,                     // NSEvent timestamp (f64 bits) of the last press
     }
 
     /// A brightness key event: (0 = up / 1 = down, pressed down?).

@@ -240,7 +240,7 @@ impl Core {
     fn follow_system(&mut self) {
         let (mut ups, downs) = self.booster.take_key_presses();
         if ups + downs > 0 {
-            self.trace(&format!("key up={ups} down={downs} sys={:?}", self.booster.system_brightness()), self.last_sys.unwrap_or(0.0), self.boost_applied);
+            self.trace(&format!("key up={ups} down={downs} age={:.1}ms sys={:?}", self.booster.key_age_ms(), self.booster.system_brightness()), self.last_sys.unwrap_or(0.0), self.boost_applied);
             self.fast_until = Some(Instant::now() + FAST_AFTER_KEY);
         }
         if self.takes_all_keys() && ups + downs > 0 {

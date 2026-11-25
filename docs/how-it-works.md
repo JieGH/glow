@@ -30,8 +30,8 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
 - Glow starts with the boost armed at plain 100%, so nothing changes at launch. Pressing
   brightness-up at full brightness goes past 100%.
 - One key press moves 1/16 of the range. Changes fade by elapsed time: each update covers
-  `1 − exp(−dt / FADE_TAU)` of the remaining distance (`FADE_TAU` = 40 ms), so a step lands in
-  about 120 ms at any update rate. The total moves at most 3.0 per second (`SPEED_CAP`).
+  `1 − exp(−dt / FADE_TAU)` of the remaining distance (`FADE_TAU` = 25 ms), so a step lands in
+  about 80 ms at any update rate. The total moves at most 3.0 per second (`SPEED_CAP`).
   One eased total drives every screen: the system value, the synced displays, software dimming
   and the boost are all written from it, so they move together. Dragging the bar only sets the
   goal; the fade follows it. A key press wakes the timer at once. While anything fades, or
@@ -89,5 +89,5 @@ Glow has no Dock icon, only a sun in the menu bar.
 | Colour-table drift tolerance | 0.03 | `GAMMA_DRIFT` |
 | Speed cap | 3.0 total/s | `SPEED_CAP` in `src/boost.rs` |
 | Read-back noise | 0.01 | `READBACK_NOISE` in `src/main.rs` |
-| Fade time constant | 40 ms | `FADE_TAU` in `src/boost.rs` |
+| Fade time constant | 25 ms | `FADE_TAU` in `src/boost.rs` |
 | Software-dim floor | 0.05 | `DIM_FLOOR` |
