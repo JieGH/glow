@@ -14,6 +14,8 @@ Make your Mac screen brighter than it normally goes, and dim all your screens to
 
 Click the sun in the menu bar. A small panel opens under it:
 
+<img src="docs/images/panel.png" width="300" alt="The Glow panel">
+
 - A big percentage, such as **150%**.
 - One slider from 0% to 200%.
 - A list of your screens, each with its current state.
