@@ -29,12 +29,15 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
   loaded at run time. This is why Glow isn't on the Mac App Store.
 - Glow starts with the boost armed at plain 100%, so nothing changes at launch. Pressing
   brightness-up at full brightness goes past 100%.
-- One key press moves 1/16 of the range. Changes fade smoothly: each step covers 62% of the
-  remaining distance, about 14 times a second.
+- One key press moves 1/16 of the range. Changes fade by elapsed time: each update covers
+  `1 − exp(−dt / FADE_TAU)` of the remaining distance (`FADE_TAU` = 40 ms), so a step lands in
+  about 120 ms at any update rate. A key press wakes the timer at once. While anything fades, or
+  for 600 ms after a key press, the timer runs once per display frame; otherwise it runs about
+  14 times a second.
 - Glow needs no privacy permission. It watches brightness key presses without taking them, so
   macOS always dims first and shows its own indicator. Glow follows and corrects:
   - Brightness-down while boosted takes one step off the boost and holds the system at full for
-    600 ms, so the system's own dimming can't drain the boost.
+    600 ms (re-asserted every frame; a down press with no boost left ends the hold), so the system's own dimming can't drain the boost.
   - Brightness-up at full brightness adds one step of boost.
   - With no screen that has its own brightness (lid closed, external displays only) and Sync on,
     macOS ignores the keys, so Glow moves the total one step across 0–200% itself.
@@ -80,5 +83,5 @@ Glow has no Dock icon, only a sun in the menu bar.
 | Minimum EDR headroom | 1.05 | `EDR_MIN_HEADROOM` |
 | HDR wake timeout | 10 s | `GATE_TIMEOUT` |
 | Colour-table drift tolerance | 0.03 | `GAMMA_DRIFT` |
-| Fade share per step | 0.62 | `SMOOTH` |
+| Fade time constant | 40 ms | `FADE_TAU` in `src/boost.rs` |
 | Software-dim floor | 0.05 | `DIM_FLOOR` |
