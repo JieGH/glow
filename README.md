@@ -2,12 +2,13 @@
 
 <img src="macos/icon.png" width="96" align="right" alt="Glow icon">
 
-Make your Mac screen brighter than it normally goes, and dim all your screens together. Glow lives in the menu bar.
+Make your Mac screen brighter than it normally goes, and dim all your screens together, including the backlights of supported external monitors. Glow lives in the menu bar.
 
 ## What it does
 
 - **Brighter than 100%.** On Macs with an XDR or HDR screen, slide past 100% for extra brightness. Glow opens at 120%.
 - **Dim everything together.** Turn down your laptop and external monitors with one slider.
+- **Hardware control for external monitors.** Glow can lower a supported monitor's own brightness, not just darken the picture.
 - **Your brightness keys still work.** Pressing brightness-up at full brightness goes brighter. Handy in a bright room. Turn the switch at the top of the panel off to stop it.
 
 ## What it looks like
@@ -35,9 +36,15 @@ Right-click the sun for a short menu.
 
 - macOS 13 or later.
 - An XDR or HDR screen for the extra brightness. Dimming works on any display.
-- Optional: `brew install m1ddc` lets Glow dim supported external monitors with their own backlight
-  (DDC) instead of in software. Reopen Glow after installing. If Glow is force-quit or crashes while
-  dimmed, the monitor stays dimmed.
+
+## Hardware control for external monitors
+
+1. Install [`m1ddc`](https://github.com/waydabber/m1ddc) with [Homebrew](https://brew.sh): `brew install m1ddc`.
+2. Reopen Glow and turn on **Sync all displays**.
+3. Drag below 100%. Back at 100%, or on quit, Glow restores your previous monitor brightness.
+
+It depends on your monitor, cable and port. Otherwise Glow dims in software. If Glow crashes or is
+force-quit while dimmed, or you unplug a dimmed monitor and then quit, the monitor can stay dimmed.
 
 ## Install
 
