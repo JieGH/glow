@@ -1,6 +1,7 @@
 //! Hardware dimming for external monitors over DDC, through the optional `m1ddc` tool (see docs/how-it-works.md).
 //! m1ddc is slow, so one worker thread runs it. It always acts on the latest level, so there is no backlog.
 
+use objc2_foundation::{NSString, NSUserDefaults};
 use std::collections::HashMap;
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -43,7 +44,18 @@ struct State {
 
 type Shared = Arc<(Mutex<State>, Condvar)>;
 
-pub struct Ddc(Shared);
+pub struct Ddc {
+    shared: Shared,
+    curve: f32, // above 1.0, DDC monitors dim faster than the slider
+}
+
+// shortcut: one curve for every DDC monitor; make it per-monitor when someone uses two that differ.
+const CURVE_KEY: &str = "ddcCurve";
+
+/// The slider level as a DDC monitor should follow it. 0% and 100% stay put.
+fn shape(level: f32, curve: f32) -> f32 {
+    if full(level) { 1.0 } else { level.clamp(0.0, 1.0).powf(curve) }
+}
 
 fn full(level: f32) -> bool {
     level >= 0.999
@@ -219,12 +231,14 @@ impl Ddc {
         let shared: Shared = Arc::new((Mutex::new(state), Condvar::new()));
         let theirs = shared.clone();
         std::thread::Builder::new().name("ddc".into()).spawn(move || worker(path, &theirs)).ok()?;
-        Some(Ddc(shared))
+        let saved = NSUserDefaults::standardUserDefaults().doubleForKey(&NSString::from_str(CURVE_KEY)) as f32;
+        let curve = if saved > 0.0 { saved.clamp(0.25, 4.0) } else { 1.0 }; // 0.0 = not set
+        Some(Ddc { shared, curve })
     }
 
     fn change(&self, f: impl FnOnce(&mut State)) {
-        f(&mut self.0 .0.lock().unwrap());
-        self.0 .1.notify_all();
+        f(&mut self.shared.0.lock().unwrap());
+        self.shared.1.notify_all();
     }
 
     /// A screen without macOS brightness control was connected: probe it.
@@ -242,7 +256,8 @@ impl Ddc {
 
     /// The wanted dim level (0..1) for every DDC monitor; 1.0 restores the person's own luminance.
     pub fn set_level(&self, level: f32) {
-        let mut s = self.0 .0.lock().unwrap();
+        let level = shape(level, self.curve);
+        let mut s = self.shared.0.lock().unwrap();
         if s.level == level {
             return;
         }
@@ -250,24 +265,24 @@ impl Ddc {
             s.monitors.values_mut().for_each(|m| m.failed = false); // retry once per change of session
         }
         s.level = level;
-        self.0 .1.notify_all();
+        self.shared.1.notify_all();
     }
 
     /// True once this screen is dimmed over DDC.
     pub fn dims(&self, id: u32) -> bool {
-        let s = self.0 .0.lock().unwrap();
+        let s = self.shared.0.lock().unwrap();
         matches!(s.links.get(&id), Some(Link::Ready(u)) if s.monitors.get(u).is_some_and(|m| !m.failed))
     }
 
     /// True while software dimming must leave this screen alone: DDC dims it, or the probe is still running.
     pub fn holds(&self, id: u32) -> bool {
-        matches!(self.0 .0.lock().unwrap().links.get(&id), Some(Link::Probing)) || self.dims(id)
+        matches!(self.shared.0.lock().unwrap().links.get(&id), Some(Link::Probing)) || self.dims(id)
     }
 
     /// Restore every dimmed monitor and stop the worker. Waits for the writes, but not forever.
     pub fn shutdown(&self) {
         self.change(|s| s.quit = true);
-        let (lock, wake) = &*self.0;
+        let (lock, wake) = &*self.shared;
         let guard = lock.lock().unwrap();
         let _unused = wake.wait_timeout_while(guard, QUIT_TIMEOUT, |s| !s.done);
     }
@@ -275,7 +290,15 @@ impl Ddc {
 
 #[cfg(test)]
 mod tests {
-    use super::{luminance, parse_list, plan, Monitor, Step};
+    use super::{luminance, parse_list, plan, shape, Monitor, Step};
+
+    #[test]
+    fn curve_keeps_the_ends_and_dims_faster_above_one() {
+        assert_eq!(shape(0.0, 1.5), 0.0);
+        assert_eq!(shape(1.0, 1.5), 1.0);
+        assert_eq!(shape(0.5, 1.0), 0.5);
+        assert_eq!(luminance(100, shape(0.5, 1.5)), 35);
+    }
 
     #[test]
     fn parses_ids_and_uuids_per_block() {
