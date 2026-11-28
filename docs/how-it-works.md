@@ -56,7 +56,10 @@ HDR only stays awake while there is a boost to show. It sleeps again 1 s after r
 display dims together:
 
 - Displays with their own brightness control follow the main screen through `DisplayServices`.
-- Other external displays are dimmed in software by scaling their saved colour table by
+- Other external displays are dimmed over DDC (their own backlight control) if
+  [`m1ddc`](https://github.com/waydabber/m1ddc) is installed and can read their luminance. See
+  below.
+- The rest are dimmed in software by scaling their saved colour table by
   `0.05 + 0.95 × level`. The 5% floor keeps a screen from going fully black.
 - If a display's colour table can't be read, Glow uses a click-through black overlay window
   instead.
@@ -64,6 +67,25 @@ display dims together:
   table (for example after waking from sleep) and reapplies the dimming.
 - If no connected screen has its own brightness control (for example a closed laptop with external
   monitors), Glow keeps its own 0–100% value so the slider and keys still dim every monitor.
+
+### DDC dimming
+
+- Glow looks for `m1ddc` in `/opt/homebrew/bin` and `/usr/local/bin`. Without it, all of these
+  displays use software dimming.
+- When a dim session starts, Glow reads the monitor's luminance as the baseline. It then writes
+  `round(baseline × level)`, so it never goes above your own setting. It does not also dim in
+  software. At 0% the luminance is 0; how dark that looks depends on the monitor.
+- At 100%, with Sync off, or on quit, Glow writes the baseline back and forgets it. The next
+  session reads it again. Quit waits up to 5 s for this. If Glow never dimmed, it never writes.
+- A background thread runs `m1ddc` and sends only the latest value, skipping repeats. Each command
+  is stopped after 2 s.
+- If the probe fails, the display uses software dimming until it is reconnected. If a later read or
+  write fails, it uses software dimming until dimming next starts or ends. Glow keeps the baseline
+  until a restore succeeds. If restoring also fails, the monitor can stay dimmed, with software
+  dimming on top.
+- A reconnected monitor keeps its baseline while Glow runs.
+- **A force-quit or crash leaves the monitor at the dimmed value.** The same can happen if you
+  unplug a dimmed monitor and then quit Glow. Reset it with the monitor's own buttons.
 
 ## The menu-bar icon
 
