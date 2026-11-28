@@ -1,4 +1,6 @@
 mod boost;
+#[cfg(target_os = "macos")]
+mod ddc;
 mod update;
 #[cfg(target_os = "macos")]
 mod tray;
@@ -520,7 +522,7 @@ impl eframe::App for App {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let r = toggle(ui, &mut c.sync).on_hover_text(
-                    "Dim all monitors together below 100%, using software dimming for external displays",
+                    "Dim all monitors together below 100%. External displays use DDC (needs m1ddc) or software dimming",
                 );
                 #[cfg(target_os = "macos")]
                 if r.changed() {

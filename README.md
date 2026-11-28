@@ -35,6 +35,9 @@ Right-click the sun for a short menu.
 
 - macOS 13 or later.
 - An XDR or HDR screen for the extra brightness. Dimming works on any display.
+- Optional: `brew install m1ddc` lets Glow dim supported external monitors with their own backlight
+  (DDC) instead of in software. Reopen Glow after installing. If Glow is force-quit or crashes while
+  dimmed, the monitor stays dimmed.
 
 ## Install
 

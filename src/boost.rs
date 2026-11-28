@@ -5,8 +5,8 @@
 //!    boost factor, following the headroom as macOS ramps it up.
 //! 2. Below 100% (synced dimming): keep all connected displays dimming together.
 //!    Displays with native hardware brightness follow via DisplayServices; external displays that
-//!    do not expose hardware brightness are dimmed smoothly in software by scaling their colour
-//!    table below 1.0 (with a borderless dark overlay fallback if the colour table is unavailable).
+//!    do not expose hardware brightness are dimmed over DDC when `m1ddc` can drive them, else
+//!    smoothly in software by scaling their colour table below 1.0 (with a borderless dark overlay fallback if the colour table is unavailable).
 //! Turning off or quitting restores all colour tables and closes all helper windows.
 
 use std::time::{Duration, Instant};
@@ -38,6 +38,11 @@ pub fn factor(headroom: f64, level: f32) -> f32 {
 pub fn dim_factor(level: f32) -> f32 {
     let l = level.clamp(0.0, 1.0);
     if l >= 0.999 { 1.0 } else { DIM_FLOOR + (1.0 - DIM_FLOOR) * l }
+}
+
+/// True when a screen gained or lost HDR (the user flipped the macOS HDR setting; the screen id can stay the same).
+fn hdr_changed(old_potential: f64, new_potential: f64) -> bool {
+    (old_potential > EDR_MIN_HEADROOM) != (new_potential > EDR_MIN_HEADROOM)
 }
 
 /// Reading the live NSScreen list is relatively expensive. It is only needed while HDR is active
@@ -110,6 +115,7 @@ impl Booster {
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
+    use crate::ddc::Ddc;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::MainThreadMarker;
@@ -174,6 +180,7 @@ mod mac {
         _monitors: Vec<Retained<AnyObject>>,
         device: Option<Retained<ProtocolObject<dyn MTLDevice>>>,
         queue: Option<Retained<ProtocolObject<dyn MTLCommandQueue>>>,
+        ddc: Option<Ddc>, // None without m1ddc
     }
 
     fn read_gamma(id: u32) -> Option<Gamma> {
@@ -241,6 +248,7 @@ mod mac {
                 _monitors,
                 device: None,
                 queue: None,
+                ddc: Ddc::find(),
             };
             b.sync_screens();
             b
@@ -294,22 +302,33 @@ mod mac {
             (c[0].swap(0, Ordering::Relaxed), c[1].swap(0, Ordering::Relaxed))
         }
 
-        /// Keep one entry per connected screen.
+        /// Keep one entry per connected screen. A screen whose HDR support changed is dropped and added afresh.
         fn sync_screens(&mut self) {
             self.last_screen_sync = Instant::now();
             let list = screens(self.mtm);
             let mut i = 0;
             while i < self.displays.len() {
                 let id = self.displays[i].id;
-                if list.iter().any(|s| s.CGDirectDisplayID() == id) {
+                let found = list.iter().find(|s| s.CGDirectDisplayID() == id);
+                let potential = found.map(|s| s.maximumPotentialExtendedDynamicRangeColorComponentValue());
+                if potential.is_some_and(|p| !hdr_changed(self.displays[i].potential, p)) {
                     i += 1;
                 } else {
                     let mut removed = self.displays.remove(i);
+                    if let Some(ddc) = &self.ddc {
+                        ddc.remove(id);
+                    }
                     if let Some(w) = removed.window.take() {
                         w.close();
                     }
                     if let Some(s) = removed.shade.take() {
                         s.close();
+                    }
+                    // Still connected: undo our scaling first, so the fresh entry doesn't read it as its baseline.
+                    if let (true, Some(base)) = (found.is_some(), &removed.baseline) {
+                        if (removed.applied_gamma - 1.0).abs() >= 0.001 {
+                            write_gamma(id, base, 1.0);
+                        }
                     }
                 }
             }
@@ -333,6 +352,9 @@ mod mac {
                         layer: None,
                         shade: None,
                     };
+                    if let (false, Some(ddc)) = (has_hw_brightness, &self.ddc) {
+                        ddc.add(id);
+                    }
                     if self.on {
                         self.init_boost_display(&mut d, s);
                     }
@@ -362,6 +384,9 @@ mod mac {
             }
             if let Some(dev) = &self.device {
                 let (w, l) = make_trigger(self.mtm, screen, dev);
+                if let Some(q) = &self.queue {
+                    render_trigger(&l, q);
+                }
                 d.window = Some(w);
                 d.layer = Some(l);
             }
@@ -441,6 +466,9 @@ mod mac {
         /// Close every helper window and restore all display colour tables (used on quit/drop).
         pub fn restore_all(&mut self) {
             self.on = false;
+            if let Some(ddc) = &self.ddc {
+                ddc.shutdown();
+            }
             for d in &mut self.displays {
                 if let Some(w) = d.window.take() {
                     w.close();
@@ -483,7 +511,12 @@ mod mac {
             let mtm = self.mtm;
             let on = self.on;
             let has_shade = self.displays.iter().any(|d| d.shade.is_some());
-            let needs_soft_dim = dim_target < 0.999 && self.displays.iter().any(|d| !d.has_hw_brightness);
+            if let Some(ddc) = &self.ddc {
+                ddc.set_level(if sync { hw_target } else { 1.0 });
+            }
+            let ddc = self.ddc.as_ref();
+            let held = |id| ddc.is_some_and(|c| c.holds(id));
+            let needs_soft_dim = dim_target < 0.999 && self.displays.iter().any(|d| !d.has_hw_brightness && !held(d.id));
             let list = needs_screen_snapshot(on, has_shade, needs_soft_dim).then(|| screens(self.mtm));
             let mut gamma_written = false;
 
@@ -557,7 +590,7 @@ mod mac {
                 };
                 let target_gamma = if boost_target > 1.001 {
                     boost_target
-                } else if !d.has_hw_brightness {
+                } else if !d.has_hw_brightness && !held(d.id) {
                     dim_target
                 } else {
                     1.0
@@ -643,10 +676,14 @@ mod mac {
             self.displays
                 .iter()
                 .map(|d| {
+                    let ddc = self.ddc.as_ref().is_some_and(|c| c.dims(d.id));
+                    let kind = if ddc { "hardware" } else { "software" };
                     let (status, tone) = if d.applied_gamma > 1.005 {
                         (format!("Boosted ×{:.2}", d.applied_gamma), RowTone::Boosted)
                     } else if d.applied_gamma < 0.995 {
                         (format!("Dimmed · {pct:.0}%"), RowTone::Dimmed)
+                    } else if sync && ddc && dim_level < 0.995 {
+                        (format!("Dimmed · {pct:.0}% · hardware"), RowTone::Dimmed)
                     } else if sync && d.has_hw_brightness && Some(d.id) != primary_id && dim_level < 0.995 {
                         (format!("Synced · {pct:.0}%"), RowTone::Dimmed)
                     } else {
@@ -660,12 +697,13 @@ mod mac {
                             BoostPhase::Off => {
                                 if d.potential > EDR_MIN_HEADROOM {
                                     if sync && !d.has_hw_brightness {
-                                        ("HDR + software dim".to_string(), RowTone::Ready)
+                                        (format!("HDR + {kind} dim"), RowTone::Ready)
                                     } else {
                                         ("Ready to boost".to_string(), RowTone::Ready)
                                     }
                                 } else if sync && !d.has_hw_brightness {
-                                    ("Software dim ready".to_string(), RowTone::Ready)
+                                    let kind = if ddc { "Hardware" } else { "Software" };
+                                    (format!("{kind} dim ready"), RowTone::Ready)
                                 } else {
                                     ("No HDR brightness".to_string(), RowTone::Muted)
                                 }
@@ -859,7 +897,15 @@ mod mac {
 
 #[cfg(test)]
 mod cpu_tests {
-    use super::needs_screen_snapshot;
+    use super::{hdr_changed, needs_screen_snapshot};
+
+    #[test]
+    fn hdr_toggle_is_detected_but_value_drift_is_not() {
+        assert!(hdr_changed(10.15, 1.0));
+        assert!(hdr_changed(1.0, 10.15));
+        assert!(!hdr_changed(1.0, 1.0));
+        assert!(!hdr_changed(16.0, 10.15));
+    }
 
     #[test]
     fn idle_tick_does_not_enumerate_screens() {
