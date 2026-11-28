@@ -75,6 +75,9 @@ display dims together:
 - When a dim session starts, Glow reads the monitor's luminance as the baseline. It then writes
   `round(baseline × level)`, so it never goes above your own setting. It does not also dim in
   software. At 0% the luminance is 0; how dark that looks depends on the monitor.
+- If your monitor still looks brighter than the Mac when dimmed, make it dim faster with
+  `defaults write io.github.jiegh.glow ddcCurve -float 1.5`, then reopen Glow. The monitor gets
+  `round(baseline × level^ddcCurve)`. Default 1.0, range 0.25–4. It applies to all DDC monitors.
 - At 100%, with Sync off, or on quit, Glow writes the baseline back and forgets it. The next
   session reads it again. Quit waits up to 5 s for this. If Glow never dimmed, it never writes.
 - A background thread runs `m1ddc` and sends only the latest value, skipping repeats. Each command
